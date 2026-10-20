@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DOMYN
 
-## Getting Started
+Integrated restroom satisfaction and service management for TLT/TSO operations. Public tablets collect anonymous ratings. Internal users handle staff coverage, complaints, SLA visibility, and reporting.
 
-First, run the development server:
+Proposed business rules that TLT has not approved are stored as settings or decisions and labeled provisional. They are not treated as approved policy.
 
-```bash
+## Local setup
+
+Requirements: Node.js 22, Docker Desktop (for PostgreSQL).
+
+```powershell
+copy .env.example .env
+docker compose up -d postgres
+npm install
+npx prisma migrate deploy
+npm run db:seed
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The seed script stops if `admin@domyn.local` already exists. `npm run db:reset` drops the database, reapplies migrations, and seeds again. Seed refuses to run when `NODE_ENV=production` unless `SEED_ALLOW_PRODUCTION=true`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Development accounts
 
-## Learn More
+Password comes from `SEED_DEMO_PASSWORD` (default `ChangeMe-Dev-Only!`). These accounts exist only after seeding and must not be used in production.
 
-To learn more about Next.js, take a look at the following resources:
+| Email | Role |
+|---|---|
+| admin@domyn.local | Admin |
+| supervisor@domyn.local | Supervisor |
+| staff@domyn.local | Staff |
+| management@domyn.local | Management |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Kiosk exit PIN in the seeded database: `2468`. Public survey URLs use the device code, for example http://localhost:3000/kiosk/TAB-TLT-GF-STARBUCKS.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Commands
 
-## Deploy on Vercel
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Development server |
+| `npm run build` / `npm start` | Production build and server |
+| `npm run typecheck` | TypeScript |
+| `npm run lint` | ESLint |
+| `npm test` | Vitest, including database integrity tests. Requires `.env` and a migrated database. |
+| `npm run db:migrate` | Create a new Prisma migration |
+| `npm run db:deploy` | Apply migrations |
+| `npm run db:seed` | Load development data |
+| `npm run job:sla` | Run the overdue/escalation sweep once |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Environment
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `.env.example`. Do not commit `.env`.
+
+`WHATSAPP_PROVIDER=sandbox` records notification attempts and does not contact WhatsApp. A real send happens only when the provider is `whatsapp` and `WHATSAPP_API_URL`, `WHATSAPP_TOKEN`, `WHATSAPP_SENDER`, and `WHATSAPP_TEMPLATE_NAME` are all set. Missing credentials fail the attempt; the complaint record is kept.
+
+Password reset email is not configured. In development, the forgot-password response can include a reset path when `EXPOSE_RESET_TOKEN=true`. Production does not create a self-service token.
+
+## Documentation
+
+- [Architecture and data model](docs/architecture.md)
+- [API](docs/api.md)
+- [Deployment](docs/deployment.md)
+- [Operations](docs/runbook.md)
+- [Pending TLT decisions](docs/pending-decisions.md)

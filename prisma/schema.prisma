@@ -1,0 +1,738 @@
+// DOMYN operational schema.
+// Timestamps are stored in UTC. Display conversion uses the configured IANA timezone.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConnectionType {
+  WIFI
+  CELLULAR
+}
+
+enum DeviceStatus {
+  ONLINE
+  OFFLINE
+  SYNC_PENDING
+  ERROR
+  INACTIVE
+}
+
+enum RestroomCategory {
+  MALE
+  FEMALE
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCING
+  SYNCED
+  FAILED
+}
+
+enum AbsenceType {
+  SICK
+  PERMISSION
+  ABSENCE
+  OTHER
+}
+
+enum CheckInMethod {
+  TABLET
+  MOBILE
+  MANUAL
+}
+
+enum TicketStatus {
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum AssignmentSource {
+  PLANNED
+  REPLACEMENT
+  FALLBACK
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum DeliveryMode {
+  SANDBOX
+  WHATSAPP
+}
+
+enum RecipientRole {
+  PRIMARY
+  FALLBACK
+  SUPERVISOR
+  WATCHER
+}
+
+enum DecisionStatus {
+  PENDING
+  PROVISIONAL
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  roleId       String
+  active       Boolean   @default(true)
+  phone        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  role         Role      @relation(fields: [roleId], references: [id])
+  sessions     Session[]
+  areaAccess   UserAreaAccess[]
+  staffProfile Staff?
+  passwordResets PasswordReset[]
+  auditLogs    AuditLog[] @relation("AuditActor")
+  supervisedLocations RestroomLocation[] @relation("LocationSupervisor")
+  fallbackTickets ComplaintTicket[] @relation("TicketFallback")
+  comments     TicketComment[]
+  statusChanges TicketStatusHistory[] @relation("StatusActor")
+  assignmentChanges TicketAssignmentHistory[] @relation("AssignmentActor")
+  absencesRecorded StaffAbsence[] @relation("AbsenceRecorder")
+  replacementsCreated StaffReplacement[] @relation("ReplacementAuthor")
+  checkInsCorrected StaffCheckIn[] @relation("CheckInCorrector")
+  slaEscalations SlaConfiguration[] @relation("SlaEscalationUser")
+  notificationRecipients NotificationRecipient[]
+  decisionNotes DecisionHistory[]
+  importBatches ImportBatch[]
+  assignmentsCreated PlannedAssignment[] @relation("AssignmentCreator")
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  name        String
+  description String
+  permissions RolePermission[]
+  users       User[]
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  description String
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserAreaAccess {
+  id         String            @id @default(cuid())
+  userId     String
+  buildingId String?
+  locationId String?
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  building   Building?         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  location   RestroomLocation? @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, buildingId, locationId])
+  @@index([userId])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  ip        String?
+  userAgent String?
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Building {
+  id        String             @id @default(cuid())
+  code      String             @unique
+  name      String
+  active    Boolean            @default(true)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  floors    Floor[]
+  access    UserAreaAccess[]
+}
+
+model Floor {
+  id         String             @id @default(cuid())
+  buildingId String
+  code       String
+  name       String
+  level      Int
+  building   Building           @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  locations  RestroomLocation[]
+
+  @@unique([buildingId, code])
+}
+
+model RestroomLocation {
+  id                String             @id @default(cuid())
+  floorId           String
+  code              String             @unique
+  name              String
+  connectionType    ConnectionType
+  powerPreparation  String
+  active            Boolean            @default(true)
+  supervisorUserId  String?
+  notes             String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  floor             Floor              @relation(fields: [floorId], references: [id], onDelete: Restrict)
+  supervisor        User?              @relation("LocationSupervisor", fields: [supervisorUserId], references: [id], onDelete: SetNull)
+  devices           Device[]
+  coverage          StaffAreaCoverage[]
+  planned           PlannedAssignment[]
+  replacements      StaffReplacement[]
+  checkIns          StaffCheckIn[]
+  submissions       FeedbackSubmission[]
+  tickets           ComplaintTicket[]
+  groups            ComplaintGroup[]
+  slaConfigurations SlaConfiguration[]
+  access            UserAreaAccess[]
+
+  @@index([floorId])
+}
+
+model Device {
+  id                   String           @id @default(cuid())
+  code                 String           @unique
+  name                 String
+  locationId           String
+  connectionType       ConnectionType
+  status               DeviceStatus     @default(OFFLINE)
+  active               Boolean          @default(true)
+  activatedAt          DateTime?
+  deactivatedAt        DateTime?
+  lastSeenAt           DateTime?
+  lastSyncAt           DateTime?
+  lastSyncError        String?
+  pendingOfflineCount  Int              @default(0)
+  heartbeatIntervalSec Int              @default(60)
+  staleAfterSec        Int              @default(180)
+  clockDriftMs         Int?
+  kioskPinHash         String?
+  appVersion           String?
+  notes                String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  location             RestroomLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  heartbeats           DeviceHeartbeat[]
+  submissions          FeedbackSubmission[]
+  checkIns             StaffCheckIn[]
+
+  @@index([locationId])
+  @@index([status])
+}
+
+model DeviceHeartbeat {
+  id           String   @id @default(cuid())
+  deviceId     String
+  eventAt      DateTime
+  receivedAt   DateTime @default(now())
+  pendingCount Int      @default(0)
+  clockDriftMs Int?
+  syncError    String?
+  appVersion   String?
+  device       Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, receivedAt])
+}
+
+model FeedbackReason {
+  id               String                     @id @default(cuid())
+  code             String                     @unique
+  label            String
+  active           Boolean                    @default(true)
+  sortOrder        Int
+  allowFreeText    Boolean                    @default(false)
+  freeTextRequired Boolean                    @default(false)
+  submissions      FeedbackSubmissionReason[]
+  tickets          TicketReason[]
+  groups           ComplaintGroup[]
+  slaConfigurations SlaConfiguration[]
+}
+
+model FeedbackSubmission {
+  id                 String                     @id @default(cuid())
+  clientSubmissionId String                     @unique
+  deviceId           String
+  locationId         String
+  restroomCategory   RestroomCategory
+  rating             Int
+  otherText          String?
+  eventAt            DateTime
+  receivedAt         DateTime                   @default(now())
+  syncStatus         SyncStatus                 @default(SYNCED)
+  clockDriftMs       Int?
+  userAgent          String?
+  createdAt          DateTime                   @default(now())
+  device             Device                     @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  location           RestroomLocation           @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  reasons            FeedbackSubmissionReason[]
+  ticketLinks        TicketFeedbackLink[]
+
+  @@index([locationId, receivedAt])
+  @@index([deviceId, receivedAt])
+  @@index([rating, receivedAt])
+  @@index([eventAt])
+}
+
+model FeedbackSubmissionReason {
+  submissionId String
+  reasonId     String
+  submission   FeedbackSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  reason       FeedbackReason     @relation(fields: [reasonId], references: [id], onDelete: Restrict)
+
+  @@id([submissionId, reasonId])
+}
+
+model Staff {
+  id              String                 @id @default(cuid())
+  employeeCode    String                 @unique
+  name            String
+  phone           String?
+  email           String?
+  designation     String
+  active          Boolean                @default(true)
+  userId          String?                @unique
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  coverage        StaffAreaCoverage[]
+  planned         PlannedAssignment[]
+  absences        StaffAbsence[]         @relation("AbsenceStaff")
+  replaced        StaffReplacement[]     @relation("OriginalStaff")
+  covering        StaffReplacement[]     @relation("ReplacementStaff")
+  checkIns        StaffCheckIn[]
+  assignedTickets ComplaintTicket[]
+  assignmentFrom  TicketAssignmentHistory[] @relation("FromStaff")
+  assignmentTo    TicketAssignmentHistory[] @relation("ToStaff")
+  notificationRecipients NotificationRecipient[]
+}
+
+model StaffAreaCoverage {
+  id            String           @id @default(cuid())
+  staffId       String
+  locationId    String
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  staff         Staff            @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  location      RestroomLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@index([staffId])
+  @@index([locationId, effectiveFrom])
+}
+
+model Shift {
+  id          String              @id @default(cuid())
+  code        String              @unique
+  name        String
+  startMinute Int
+  endMinute   Int
+  active      Boolean             @default(true)
+  planned     PlannedAssignment[]
+}
+
+model PlannedAssignment {
+  id          String           @id @default(cuid())
+  staffId     String
+  locationId  String
+  shiftId     String
+  workDate    DateTime         @db.Date
+  notes       String?
+  createdById String?
+  createdAt   DateTime         @default(now())
+  staff       Staff            @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  location    RestroomLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  shift       Shift            @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  createdBy   User?            @relation("AssignmentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  checkIns    StaffCheckIn[]
+
+  @@unique([staffId, locationId, shiftId, workDate])
+  @@index([locationId, workDate])
+  @@index([workDate])
+}
+
+model StaffAbsence {
+  id           String           @id @default(cuid())
+  staffId      String
+  type         AbsenceType
+  startAt      DateTime
+  endAt        DateTime
+  notes        String?
+  recordedById String
+  createdAt    DateTime         @default(now())
+  staff        Staff            @relation("AbsenceStaff", fields: [staffId], references: [id], onDelete: Restrict)
+  recordedBy   User             @relation("AbsenceRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
+  replacements StaffReplacement[]
+
+  @@index([staffId, startAt])
+}
+
+model StaffReplacement {
+  id                   String           @id @default(cuid())
+  absenceId            String?
+  originalStaffId      String
+  replacementStaffId   String
+  locationId           String
+  reason               String
+  effectiveFrom        DateTime
+  effectiveTo          DateTime
+  createdById          String
+  createdAt            DateTime         @default(now())
+  absence              StaffAbsence?    @relation(fields: [absenceId], references: [id], onDelete: SetNull)
+  originalStaff        Staff            @relation("OriginalStaff", fields: [originalStaffId], references: [id], onDelete: Restrict)
+  replacementStaff     Staff            @relation("ReplacementStaff", fields: [replacementStaffId], references: [id], onDelete: Restrict)
+  location             RestroomLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  createdBy            User             @relation("ReplacementAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([locationId, effectiveFrom, effectiveTo])
+}
+
+model StaffCheckIn {
+  id                   String             @id @default(cuid())
+  staffId              String
+  locationId           String
+  plannedAssignmentId  String?
+  method               CheckInMethod
+  deviceId             String?
+  checkedInAt          DateTime
+  matchesAssignment    Boolean
+  notes                String?
+  correctedById        String?
+  correctionReason     String?
+  correctedAt          DateTime?
+  createdAt            DateTime           @default(now())
+  staff                Staff              @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  location             RestroomLocation   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  plannedAssignment    PlannedAssignment? @relation(fields: [plannedAssignmentId], references: [id], onDelete: SetNull)
+  device               Device?            @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  correctedBy          User?              @relation("CheckInCorrector", fields: [correctedById], references: [id], onDelete: SetNull)
+
+  @@index([staffId, checkedInAt])
+  @@index([locationId, checkedInAt])
+}
+
+model ComplaintTicket {
+  id                 String             @id @default(cuid())
+  reference          String             @unique
+  locationId         String
+  restroomCategory   RestroomCategory
+  rating             Int
+  status             TicketStatus       @default(NEW)
+  priority           TicketPriority     @default(NORMAL)
+  assignedStaffId    String?
+  fallbackUserId     String?
+  assignmentSource   AssignmentSource?
+  fallbackReason     String?
+  eventAt            DateTime
+  receivedAt         DateTime
+  acknowledgedAt     DateTime?
+  firstProgressAt    DateTime?
+  resolvedAt         DateTime?
+  closedAt           DateTime?
+  groupId            String?
+  policy             String
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  location           RestroomLocation   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  assignedStaff      Staff?             @relation(fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  fallbackUser       User?              @relation("TicketFallback", fields: [fallbackUserId], references: [id], onDelete: SetNull)
+  group              ComplaintGroup?    @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  reasons            TicketReason[]
+  feedbackLinks      TicketFeedbackLink[]
+  comments           TicketComment[]
+  statusHistory      TicketStatusHistory[]
+  assignmentHistory  TicketAssignmentHistory[]
+  events             TicketEvent[]
+  notifications      Notification[]
+  slaEvents          SlaEvent[]
+
+  @@index([status, receivedAt])
+  @@index([locationId, receivedAt])
+  @@index([assignedStaffId])
+}
+
+model TicketFeedbackLink {
+  ticketId     String
+  submissionId String
+  ticket       ComplaintTicket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  submission   FeedbackSubmission @relation(fields: [submissionId], references: [id], onDelete: Restrict)
+
+  @@id([ticketId, submissionId])
+  @@index([submissionId])
+}
+
+model TicketReason {
+  ticketId String
+  reasonId String
+  ticket   ComplaintTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  reason   FeedbackReason  @relation(fields: [reasonId], references: [id], onDelete: Restrict)
+
+  @@id([ticketId, reasonId])
+}
+
+model TicketStatusHistory {
+  id         String        @id @default(cuid())
+  ticketId   String
+  fromStatus TicketStatus?
+  toStatus   TicketStatus
+  actorId    String?
+  note       String?
+  createdAt  DateTime      @default(now())
+  ticket     ComplaintTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor      User?         @relation("StatusActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+}
+
+model TicketAssignmentHistory {
+  id          String           @id @default(cuid())
+  ticketId    String
+  fromStaffId String?
+  toStaffId   String?
+  source      AssignmentSource
+  reason      String?
+  actorId     String?
+  createdAt   DateTime         @default(now())
+  ticket      ComplaintTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fromStaff   Staff?           @relation("FromStaff", fields: [fromStaffId], references: [id], onDelete: SetNull)
+  toStaff     Staff?           @relation("ToStaff", fields: [toStaffId], references: [id], onDelete: SetNull)
+  actor       User?            @relation("AssignmentActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+}
+
+model TicketComment {
+  id        String          @id @default(cuid())
+  ticketId  String
+  authorId  String?
+  body      String
+  createdAt DateTime        @default(now())
+  ticket    ComplaintTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author    User?           @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+}
+
+model TicketEvent {
+  id        String          @id @default(cuid())
+  ticketId  String
+  type      String
+  message   String
+  data      Json?
+  createdAt DateTime        @default(now())
+  ticket    ComplaintTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+}
+
+model ComplaintGroup {
+  id                String           @id @default(cuid())
+  locationId        String
+  restroomCategory  RestroomCategory
+  reasonId          String?
+  windowStart       DateTime
+  windowEnd         DateTime
+  createdAt         DateTime         @default(now())
+  location          RestroomLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  reason            FeedbackReason?  @relation(fields: [reasonId], references: [id], onDelete: SetNull)
+  tickets           ComplaintTicket[]
+
+  @@index([locationId, windowStart])
+}
+
+model SlaConfiguration {
+  id                 String          @id @default(cuid())
+  name               String
+  priority           TicketPriority?
+  locationId         String?
+  reasonId           String?
+  responseMinutes    Int?
+  progressMinutes    Int?
+  resolutionMinutes  Int?
+  graceMinutes       Int             @default(0)
+  escalationUserId   String?
+  active             Boolean         @default(false)
+  provisional        Boolean         @default(true)
+  notes              String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  location           RestroomLocation? @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  reason             FeedbackReason? @relation(fields: [reasonId], references: [id], onDelete: SetNull)
+  escalationUser     User?           @relation("SlaEscalationUser", fields: [escalationUserId], references: [id], onDelete: SetNull)
+}
+
+model SlaEvent {
+  id        String          @id @default(cuid())
+  ticketId  String
+  type      String
+  dedupeKey String          @unique
+  message   String
+  createdAt DateTime        @default(now())
+  ticket    ComplaintTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+}
+
+model Notification {
+  id         String               @id @default(cuid())
+  ticketId   String?
+  eventType  String
+  dedupeKey  String               @unique
+  status     NotificationStatus   @default(PENDING)
+  mode       DeliveryMode
+  payload    Json
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+  ticket     ComplaintTicket?     @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  attempts   NotificationAttempt[]
+  recipients NotificationRecipient[]
+
+  @@index([ticketId])
+  @@index([status, createdAt])
+}
+
+model NotificationRecipient {
+  id           String          @id @default(cuid())
+  notificationId String
+  userId       String?
+  staffId      String?
+  phoneMasked  String?
+  role         RecipientRole
+  notification Notification    @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  staff        Staff?          @relation(fields: [staffId], references: [id], onDelete: SetNull)
+
+  @@index([notificationId])
+}
+
+model NotificationAttempt {
+  id             String       @id @default(cuid())
+  notificationId String
+  recipientId    String?
+  provider       String
+  success        Boolean
+  simulated      Boolean      @default(false)
+  response       Json?
+  error          String?
+  attemptedAt    DateTime     @default(now())
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId, attemptedAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  reason     String?
+  requestId  String?
+  ip         String?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([actorId])
+}
+
+model SystemSetting {
+  key          String   @id
+  value        Json
+  provisional  Boolean  @default(true)
+  description  String
+  updatedById  String?
+  updatedAt    DateTime @updatedAt
+}
+
+model Decision {
+  id               String         @id @default(cuid())
+  code             String         @unique
+  topic            String
+  status           DecisionStatus @default(PENDING)
+  proposedDefault  String?
+  owner            String
+  notes            String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  history          DecisionHistory[]
+}
+
+model DecisionHistory {
+  id         String         @id @default(cuid())
+  decisionId String
+  status     DecisionStatus
+  note       String
+  actorId    String?
+  createdAt  DateTime       @default(now())
+  decision   Decision       @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  actor      User?          @relation(fields: [actorId], references: [id], onDelete: SetNull)
+}
+
+model ImportBatch {
+  id           String   @id @default(cuid())
+  type         String
+  fileName     String
+  createdById  String
+  successCount Int
+  errorCount   Int
+  errors       Json
+  createdAt    DateTime @default(now())
+  createdBy    User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+}
+
+model Counter {
+  key   String @id
+  value Int    @default(0)
+}
